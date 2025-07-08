@@ -183,6 +183,7 @@ CREATE requirements.txt:
   - ENSURE: All required dependencies for PydanticAI multi-agent setup
 
 CREATE .env.example:
+
   - INCLUDE: LLM_MODEL, OPEN_ROUTER_API_KEY, OPENAI_API_KEY
   - MIRROR pattern from: examples/agent/exampleAgent.py environment setup
 

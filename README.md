@@ -1,32 +1,127 @@
-# Context Engineering Template
+# Interactive Storytelling Application
 
-A comprehensive template for getting started with Context Engineering - the discipline of engineering context for AI coding assistants so they have the information necessary to get the job done end to end.
+A collaborative AI-driven storytelling application powered by PydanticAI multi-agent architecture. This application demonstrates advanced Context Engineering principles for building reliable AI systems.
 
 > **Context Engineering is 10x better than prompt engineering and 100x better than vibe coding.**
 
 ## 🚀 Quick Start
 
 ```bash
-# 1. Clone this template
-git clone https://github.com/coleam00/Context-Engineering-Intro.git
-cd Context-Engineering-Intro
+# 1. Clone the repository
+git clone <repository-url>
+cd context-engineering-test
 
-# 2. Set up your project rules (optional - template provided)
-# Edit CLAUDE.md to add your project-specific guidelines
+# 2. Set up Python virtual environment
+python -m venv venv_linux
+source venv_linux/bin/activate  # On Windows: venv_linux\Scripts\activate
 
-# 3. Add examples (highly recommended)
-# Place relevant code examples in the examples/ folder
+# 3. Install dependencies
+pip install -r requirements.txt
 
-# 4. Create your initial feature request
-# Edit INITIAL.md with your feature requirements
+# 4. Configure environment variables
+cp .env.example .env
+# Edit .env and add your API keys (OpenAI or OpenRouter)
 
-# 5. Generate a comprehensive PRP (Product Requirements Prompt)
-# In Claude Code, run:
-/generate-prp INITIAL.md
+# 5. Run the application
+python -m src.main
+# Or use the CLI command after installing:
+# pip install -e .
+# storytelling
+```
 
-# 6. Execute the PRP to implement your feature
-# In Claude Code, run:
-/execute-prp PRPs/your-feature-name.md
+## 📋 Requirements
+
+- Python 3.9+
+- OpenAI API key OR OpenRouter API key
+- Internet connection for AI model access
+
+## 🛠️ Installation
+
+### 1. Environment Setup
+```bash
+# Create virtual environment
+python -m venv venv_linux
+source venv_linux/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# For development (optional)
+pip install -e ".[dev]"
+```
+
+### 2. Configuration
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit .env file with your API keys
+# Required: Either OPENAI_API_KEY or OPEN_ROUTER_API_KEY
+# Optional: LLM_MODEL (default: gpt-4o-mini)
+# Optional: LOGFIRE_TOKEN (for logging)
+```
+
+### 3. Running the Application
+```bash
+# Direct execution
+python -m src.main
+
+# Or after installing package
+pip install -e .
+storytelling
+```
+
+## 🎮 Usage
+
+The application provides an interactive CLI for collaborative storytelling:
+
+1. **Start a new story** - Create a new interactive narrative
+2. **Continue existing story** - Load and continue a previous story
+3. **Manage characters** - Create and customize story characters
+4. **Export stories** - Save your stories in various formats
+
+### Commands Available:
+- `help` - Show available commands
+- `new` - Start a new story
+- `load` - Load an existing story
+- `save` - Save current story
+- `exit` - Exit the application
+
+## 🧪 Testing
+
+```bash
+# Run all tests
+python -m pytest
+
+# Run with coverage
+python -m pytest --cov=src
+
+# Run specific test file
+python -m pytest tests/test_agents.py
+```
+
+## 🔧 Development
+
+### Code Quality
+```bash
+# Format code
+ruff format .
+
+# Lint code
+ruff check .
+
+# Type checking
+mypy src/
+```
+
+### Project Structure
+```
+src/
+├── agents/          # AI agent implementations
+├── cli/            # Command-line interface
+├── models/         # Data models
+├── storage/        # Story persistence
+└── utils/          # Utility functions
 ```
 
 ## 📚 Table of Contents
