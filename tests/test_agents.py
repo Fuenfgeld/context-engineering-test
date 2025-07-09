@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.agents.character import CharacterManager, embody_character, StoryDeps
+from src.agents.character_creator import CharacterCreationManager
+from src.agents.scenario_generator import ScenarioGenerationManager
 from src.agents.storyteller import StorytellerAgent
 from src.models.story import Character, Scene, StoryWorld
 
@@ -22,7 +24,7 @@ class TestCharacterAgent:
         # Mock the agent response
         with patch('src.agents.character.character_agent.run') as mock_run:
             mock_response = MagicMock()
-            mock_response.data = "Hello there! I'm excited to meet you!"
+            mock_response.output = "Hello there! I'm excited to meet you!"
             mock_run.return_value = mock_response
             
             # Create a mock context
@@ -62,7 +64,7 @@ class TestCharacterAgent:
         
         with patch('src.agents.character.character_agent.run') as mock_run:
             mock_response = MagicMock()
-            mock_response.data = "Test response"
+            mock_response.output = "Test response"
             mock_run.return_value = mock_response
             
             mock_ctx = MagicMock()
@@ -113,24 +115,44 @@ class TestStorytellerAgent:
     
     @pytest.mark.asyncio
     async def test_create_scenario_expected_use(self, mock_http_client):
-        """Test scenario creation with valid concept."""
+        """Test scenario creation with valid concept using new agent architecture."""
         storyteller = StorytellerAgent(mock_http_client)
         
-        with patch.object(storyteller.agent, 'run') as mock_run:
-            mock_response = MagicMock()
-            mock_response.data = """
-            Premise: A mysterious detective investigates strange disappearances in Victorian London.
-            Setting: The foggy streets of Victorian London with gaslight and cobblestones.
-            """
-            mock_run.return_value = mock_response
-            
-            concept = "A detective story in Victorian London"
-            story_world = await storyteller.create_scenario(concept)
-            
-            assert story_world.premise != ""
-            assert story_world.setting != ""
-            assert isinstance(story_world.characters, dict)
-            assert isinstance(story_world.conflicts, list)
+        # Mock the scenario manager
+        with patch.object(storyteller.scenario_manager, 'create_scenario_from_concept') as mock_scenario:
+            # Mock the character creation manager
+            with patch('src.agents.storyteller.CharacterCreationManager') as mock_char_manager_class:
+                mock_char_manager = AsyncMock()
+                mock_char_manager_class.return_value = mock_char_manager
+                
+                # Mock character creation
+                mock_character = Character(
+                    name="Detective Holmes",
+                    description="A brilliant detective",
+                    personality="Observant and logical",
+                    speech_patterns="Speaks with precise diction"
+                )
+                mock_char_manager.create_character_from_concept = AsyncMock(return_value=mock_character)
+                
+                # Mock scenario creation
+                mock_story_world = StoryWorld(
+                    premise="A mysterious detective investigates strange disappearances in Victorian London.",
+                    setting="The foggy streets of Victorian London with gaslight and cobblestones.",
+                    conflicts=["Missing persons case", "Hidden conspiracy"],
+                    characters={},
+                    current_scene=Scene("Baker Street", "A cozy study", "Mysterious")
+                )
+                character_concepts = ["A brilliant detective", "A helpful assistant"]
+                mock_scenario.return_value = (mock_story_world, character_concepts)
+                
+                concept = "A detective story in Victorian London"
+                story_world = await storyteller.create_scenario(concept)
+                
+                assert story_world.premise != ""
+                assert story_world.setting != ""
+                assert isinstance(story_world.characters, dict)
+                assert isinstance(story_world.conflicts, list)
+                assert len(story_world.characters) > 0  # Should have created characters
     
     @pytest.mark.asyncio
     async def test_continue_story_normal_input(self, mock_http_client, sample_story_world: StoryWorld):
@@ -139,7 +161,7 @@ class TestStorytellerAgent:
         
         with patch.object(storyteller.agent, 'run') as mock_run:
             mock_response = MagicMock()
-            mock_response.data = "You examine the letter carefully. The handwriting is elegant but rushed."
+            mock_response.output = "You examine the letter carefully. The handwriting is elegant but rushed."
             mock_run.return_value = mock_response
             
             user_input = "I examine the letter on the desk"
@@ -156,7 +178,7 @@ class TestStorytellerAgent:
         
         with patch.object(storyteller.agent, 'run') as mock_run:
             mock_response = MagicMock()
-            mock_response.data = "Dark clouds gather overhead and rain begins to fall heavily."
+            mock_response.output = "Dark clouds gather overhead and rain begins to fall heavily."
             mock_run.return_value = mock_response
             
             meta_command = "*suddenly it starts raining*"
@@ -168,19 +190,23 @@ class TestStorytellerAgent:
     
     @pytest.mark.asyncio
     async def test_refine_scenario_expected_use(self, mock_http_client, sample_story_world: StoryWorld):
-        """Test scenario refinement based on feedback."""
+        """Test scenario refinement based on feedback using new agent architecture."""
         storyteller = StorytellerAgent(mock_http_client)
         
-        with patch.object(storyteller.agent, 'run') as mock_run:
-            mock_response = MagicMock()
-            mock_response.data = "Refined premise: The detective now has a mysterious past connection to the disappearances."
-            mock_run.return_value = mock_response
+        # Mock the scenario manager refinement
+        with patch.object(storyteller.scenario_manager, 'refine_scenario_from_feedback') as mock_refine:
+            refined_world = sample_story_world.copy() if hasattr(sample_story_world, 'copy') else sample_story_world
+            refined_world.premise = "Refined premise: The detective now has a mysterious past connection to the disappearances."
+            refined_world.add_history_entry("Scenario refined based on user feedback")
+            mock_refine.return_value = refined_world
             
             feedback = "Make the detective have a personal connection to the case"
-            refined_world = await storyteller.refine_scenario(feedback, sample_story_world)
+            result_world = await storyteller.refine_scenario(feedback, sample_story_world)
             
+            # Should have called the scenario manager
+            mock_refine.assert_called_once_with(sample_story_world, feedback)
             # Should have added refinement to history
-            assert any("refined" in entry.lower() for entry in refined_world.history)
+            assert any("refined" in entry.lower() for entry in result_world.history)
     
     def test_is_meta_command_detection(self, mock_http_client):
         """Test detection of meta-commands."""
@@ -208,31 +234,101 @@ class TestStorytellerAgent:
         assert user_input in context
         assert "Recent Story Events:" in context
     
-    def test_parse_scenario_response_edge_case(self, mock_http_client):
-        """Test parsing scenario response with minimal content."""
-        storyteller = StorytellerAgent(mock_http_client)
-        
-        # Test with empty/minimal response
-        minimal_response = "Not much information here"
-        parsed = storyteller._parse_scenario_response(minimal_response)
-        
-        assert isinstance(parsed, dict)
-        assert "premise" in parsed
-        assert "setting" in parsed
-        # Should handle gracefully even with no structured content
+
+class TestCharacterCreationAgent:
+    """Test cases for the character creation agent."""
     
-    def test_build_story_world_fallbacks(self, mock_http_client):
-        """Test story world building with missing data."""
-        storyteller = StorytellerAgent(mock_http_client)
+    @pytest.mark.asyncio
+    async def test_character_creation_manager_expected_use(self, sample_story_world: StoryWorld, mock_http_client):
+        """Test character creation manager with valid concept."""
+        manager = CharacterCreationManager(sample_story_world, mock_http_client)
         
-        # Test with empty scenario data
-        empty_data = {"premise": "", "setting": "", "characters": [], "conflicts": []}
-        initial_concept = "Test concept"
+        # Mock the character creation agent
+        with patch('src.agents.character_creator.create_character') as mock_create:
+            mock_character_request = MagicMock()
+            mock_character_request.name = "Detective Watson"
+            mock_character_request.description = "A loyal friend and assistant to the detective"
+            mock_character_request.personality = "Loyal, brave, and observant"
+            mock_character_request.speech_patterns = "Speaks with warmth and enthusiasm"
+            mock_create.return_value = mock_character_request
+            
+            concept = "A helpful assistant to the detective"
+            character = await manager.create_character_from_concept(concept)
+            
+            assert character.name == "Detective Watson"
+            assert character.description != ""
+            assert character.personality != ""
+            assert character.speech_patterns != ""
+            assert character.name in sample_story_world.characters
+    
+    @pytest.mark.asyncio
+    async def test_character_creation_multiple_characters(self, sample_story_world: StoryWorld, mock_http_client):
+        """Test creating multiple characters from concepts."""
+        manager = CharacterCreationManager(sample_story_world, mock_http_client)
         
-        world = storyteller._build_story_world(empty_data, initial_concept)
+        with patch('src.agents.character_creator.create_character') as mock_create:
+            # Mock multiple character responses
+            mock_chars = [
+                MagicMock(name="Character1", description="Desc1", personality="Pers1", speech_patterns="Speech1"),
+                MagicMock(name="Character2", description="Desc2", personality="Pers2", speech_patterns="Speech2")
+            ]
+            mock_create.side_effect = mock_chars
+            
+            concepts = ["First character concept", "Second character concept"]
+            characters = await manager.create_multiple_characters(concepts)
+            
+            assert len(characters) == 2
+            assert all(char.name in sample_story_world.characters for char in characters)
+
+
+class TestScenarioGenerationAgent:
+    """Test cases for the scenario generation agent."""
+    
+    @pytest.mark.asyncio
+    async def test_scenario_generation_manager_expected_use(self, mock_http_client):
+        """Test scenario generation manager with valid concept."""
+        manager = ScenarioGenerationManager(mock_http_client)
         
-        # Should create valid world with fallbacks
-        assert world.premise == initial_concept  # Should use initial concept as fallback
-        assert world.setting != ""  # Should have fallback setting
-        assert len(world.characters) > 0  # Should create default character
-        assert len(world.conflicts) > 0  # Should have default conflict
+        # Mock the scenario generation agent
+        with patch('src.agents.scenario_generator.generate_scenario') as mock_generate:
+            mock_scenario_request = MagicMock()
+            mock_scenario_request.premise = "A thrilling adventure in space"
+            mock_scenario_request.setting = "A distant galaxy filled with alien worlds"
+            mock_scenario_request.conflicts = ["Alien invasion", "Resource shortage"]
+            mock_scenario_request.opening_scene_location = "Spaceship Bridge"
+            mock_scenario_request.opening_scene_description = "The bridge hums with activity"
+            mock_scenario_request.opening_scene_atmosphere = "Tense anticipation"
+            mock_scenario_request.character_concepts = ["Space captain", "Alien diplomat"]
+            mock_generate.return_value = mock_scenario_request
+            
+            concept = "A space adventure story"
+            story_world, character_concepts = await manager.create_scenario_from_concept(concept)
+            
+            assert story_world.premise == "A thrilling adventure in space"
+            assert story_world.setting != ""
+            assert len(story_world.conflicts) == 2
+            assert len(character_concepts) == 2
+            assert "Space captain" in character_concepts
+    
+    @pytest.mark.asyncio
+    async def test_scenario_refinement_expected_use(self, mock_http_client, sample_story_world: StoryWorld):
+        """Test scenario refinement based on feedback."""
+        manager = ScenarioGenerationManager(mock_http_client)
+        
+        with patch('src.agents.scenario_generator.refine_scenario') as mock_refine:
+            mock_refined_request = MagicMock()
+            mock_refined_request.premise = "Refined premise with personal stakes"
+            mock_refined_request.setting = sample_story_world.setting
+            mock_refined_request.conflicts = sample_story_world.conflicts + ["Personal vendetta"]
+            mock_refined_request.opening_scene_location = "Updated location"
+            mock_refined_request.opening_scene_description = "Updated description"
+            mock_refined_request.opening_scene_atmosphere = "Updated atmosphere"
+            mock_refined_request.character_concepts = ["Updated character"]
+            mock_refine.return_value = mock_refined_request
+            
+            feedback = "Add more personal stakes for the protagonist"
+            refined_world = await manager.refine_scenario_from_feedback(sample_story_world, feedback)
+            
+            assert refined_world.premise == "Refined premise with personal stakes"
+            assert "Personal vendetta" in refined_world.conflicts
+            assert any("refined" in entry.lower() for entry in refined_world.history)

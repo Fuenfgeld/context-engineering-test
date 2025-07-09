@@ -23,10 +23,7 @@ cp .env.example .env
 # Edit .env and add your API keys (OpenAI or OpenRouter)
 
 # 5. Run the application
-python -m src.main
-# Or use the CLI command after installing:
-# pip install -e .
-# storytelling
+cd src && PYTHONPATH=/home/max/projects/context-engineering-test/src:/home/max/projects/context-engineering-test python main.py
 ```
 
 ## 📋 Requirements
@@ -45,47 +42,57 @@ source venv_linux/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
-
-# For development (optional)
-pip install -e ".[dev]"
 ```
 
 ### 2. Configuration
 ```bash
-# Copy environment template
+# Copy environment template (if available)
 cp .env.example .env
 
-# Edit .env file with your API keys
-# Required: Either OPENAI_API_KEY or OPEN_ROUTER_API_KEY
-# Optional: LLM_MODEL (default: gpt-4o-mini)
-# Optional: LOGFIRE_TOKEN (for logging)
+# Create .env file with your API keys
+echo "OPENAI_API_KEY=your_key_here" > .env
+# OR
+echo "OPEN_ROUTER_API_KEY=your_key_here" > .env
+
+# Optional: Set model and logging
+echo "LLM_MODEL=gpt-4o-mini" >> .env
+echo "LOGFIRE_TOKEN=your_token_here" >> .env
 ```
 
 ### 3. Running the Application
 ```bash
-# Direct execution
-python -m src.main
-
-# Or after installing package
-pip install -e .
-storytelling
+# Navigate to src directory and run
+cd src
+PYTHONPATH=/home/max/projects/context-engineering-test/src:/home/max/projects/context-engineering-test python main.py
 ```
 
 ## 🎮 Usage
 
 The application provides an interactive CLI for collaborative storytelling:
 
-1. **Start a new story** - Create a new interactive narrative
-2. **Continue existing story** - Load and continue a previous story
-3. **Manage characters** - Create and customize story characters
-4. **Export stories** - Save your stories in various formats
+### Main Menu Options:
+1. **🆕 Create new story scenario** - Generate a complete story world with characters
+2. **📚 Load existing story session** - Continue a previously saved story
+3. **📋 List all saved sessions** - View all your story sessions
+4. **🗑️ Delete a story session** - Remove unwanted sessions
+5. **❌ Exit** - Close the application
 
-### Commands Available:
-- `help` - Show available commands
-- `new` - Start a new story
-- `load` - Load an existing story
-- `save` - Save current story
-- `exit` - Exit the application
+### Story Creation Process:
+1. Enter your story concept (e.g., "A brave knight seeks a magical sword")
+2. The AI generates a complete story world including:
+   - **Premise**: Core story concept and quest
+   - **Setting**: Detailed world description
+   - **Conflicts**: Multiple storylines and challenges
+   - **Characters**: Fully developed NPCs with personalities
+   - **Opening Scene**: Starting location and atmosphere
+3. Approve or refine the generated scenario
+4. Begin interactive storytelling with character role-play
+
+### Interactive Features:
+- **Character Role-Play**: NPCs respond authentically based on their personalities
+- **Story Progression**: AI maintains narrative consistency and continuity
+- **Session Management**: Save/load stories to continue later
+- **Memory System**: Characters remember past interactions
 
 ## 🧪 Testing
 
@@ -98,6 +105,9 @@ python -m pytest --cov=src
 
 # Run specific test file
 python -m pytest tests/test_agents.py
+
+# Test the character agent specifically
+cd src && PYTHONPATH=/home/max/projects/context-engineering-test/src:/home/max/projects/context-engineering-test python test_character_agent.py
 ```
 
 ## 🔧 Development
@@ -118,11 +128,45 @@ mypy src/
 ```
 src/
 ├── agents/          # AI agent implementations
+│   ├── character.py            # Character embodiment agent
+│   ├── character_creator.py    # Character creation agent
+│   ├── scenario_generator.py   # Scenario generation agent
+│   ├── storyteller.py         # Main orchestration agent
+│   └── prompts.py             # System prompts
 ├── cli/            # Command-line interface
+│   ├── interface.py           # Main CLI interface
+│   └── commands.py            # CLI command handlers
 ├── models/         # Data models
+│   ├── story.py              # Story world, characters, scenes
+│   └── session.py            # Story session management
 ├── storage/        # Story persistence
-└── utils/          # Utility functions
+│   └── file_storage.py       # File-based storage
+├── utils/          # Utility functions
+│   └── helpers.py            # Helper functions
+└── main.py         # Application entry point
 ```
+
+## 🤖 Multi-Agent Architecture
+
+This application demonstrates advanced multi-agent patterns using PydanticAI:
+
+### Agent Specialization
+- **Scenario Generator Agent**: Creates immersive story premises, settings, conflicts, and opening scenes
+- **Character Creation Agent**: Generates detailed characters with personalities, descriptions, and speech patterns  
+- **Character Embodiment Agent**: Allows characters to speak and act authentically during gameplay
+- **Storyteller Agent**: Orchestrates the overall narrative and coordinates between agents
+
+### Agent Tools & Delegation
+Each agent uses specialized tools and can delegate to other agents:
+- Scenario creation generates character concepts that are passed to the character creator
+- The storyteller uses the character embodiment tool to make NPCs respond in character
+- Enhanced logging captures the complete data flow between agents
+
+### Key Features
+- **Role-Play System**: Characters maintain consistent personalities and speech patterns
+- **Memory Management**: Characters remember past interactions and build relationships
+- **Narrative Continuity**: Story world state is maintained across sessions
+- **Multi-Agent Coordination**: Agents work together seamlessly to create cohesive stories
 
 ## 📚 Table of Contents
 

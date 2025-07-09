@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import re
 from typing import Dict, Tuple
 
 import httpx
+import logfire
 from pydantic_ai import Agent
 
-from ..models.story import Character, Scene, StoryWorld
-from .character import StoryDeps, embody_character, get_model
-from .prompts import STORYTELLER_SYSTEM_PROMPT
+from models.story import Character, Scene, StoryWorld
+from agents.character import StoryDeps, embody_character, get_model
+from agents.character_creator import CharacterCreationManager
+from agents.scenario_generator import ScenarioGenerationManager
+from agents.prompts import STORYTELLER_SYSTEM_PROMPT
 
 
 class StorytellerAgent:
@@ -38,10 +40,14 @@ class StorytellerAgent:
             tools=[embody_character],
             retries=2
         )
+        
+        # Initialize specialized managers
+        self.scenario_manager = ScenarioGenerationManager(client)
+        self.character_creation_manager = None  # Will be initialized when we have a story world
 
     async def create_scenario(self, initial_concept: str) -> StoryWorld:
         """
-        Create a complete story scenario through conversational development.
+        Create a complete story scenario using specialized agents.
         
         Args:
             initial_concept: The initial story concept from the user
@@ -49,39 +55,105 @@ class StorytellerAgent:
         Returns:
             A complete StoryWorld with all necessary elements
         """
-        # Create empty story world to start
-        story_world = StoryWorld(
-            premise="",
-            setting="",
-            conflicts=[],
-            characters={},
-            current_scene=Scene("", "", ""),
-            history=[]
-        )
-
-        deps = StoryDeps(story_world=story_world, client=self.client)
-
-        # Guide the agent to create a complete scenario
-        scenario_prompt = f"""
-Please help develop this story concept into a complete scenario: "{initial_concept}"
-
-I need you to create:
-1. A compelling premise (2-3 sentences)
-2. A detailed setting description
-3. 2-3 main conflicts or plot threads
-4. 2-3 main characters with full profiles (name, description, personality, speech patterns)
-5. An opening scene description
-
-Present this as a structured response that I can approve or refine.
-"""
-
-        result = await self.agent.run(scenario_prompt, deps=deps)
-
-        # Parse the agent's response to extract structured data
-        scenario_data = self._parse_scenario_response(result.output)
-
-        # Create the complete story world
-        return self._build_story_world(scenario_data, initial_concept)
+        with logfire.span(
+            'Creating story scenario from concept: {concept}',
+            concept=initial_concept
+        ) as span:
+            
+            # Step 1: Create the base scenario using scenario generator
+            with logfire.span('Generating base scenario') as scenario_span:
+                story_world, character_concepts = await self.scenario_manager.create_scenario_from_concept(initial_concept)
+                scenario_span.set_attribute('scenario_generated', True)
+                scenario_span.set_attribute('character_concepts_count', len(character_concepts))
+                scenario_span.set_attribute('conflicts_count', len(story_world.conflicts))
+                
+                logfire.info(
+                    'Base scenario generated',
+                    premise_preview=story_world.premise[:100] + '...' if len(story_world.premise) > 100 else story_world.premise,
+                    character_concepts=character_concepts
+                )
+            
+            # Step 2: Initialize character creation manager with the story world
+            with logfire.span('Initializing character creation') as char_init_span:
+                self.character_creation_manager = CharacterCreationManager(story_world, self.client)
+                char_init_span.set_attribute('character_manager_initialized', True)
+            
+            # Step 3: Create characters from the concepts
+            with logfire.span('Creating characters from concepts') as char_creation_span:
+                created_characters = []
+                for i, concept in enumerate(character_concepts):
+                    with logfire.span(f'Creating character {i+1}/{len(character_concepts)}') as single_char_span:
+                        single_char_span.set_attribute('character_concept', concept[:50] + '...' if len(concept) > 50 else concept)
+                        
+                        # Create character using the character creation agent
+                        character = await self.character_creation_manager.create_character_from_concept(
+                            concept, 
+                            f"Setting: {story_world.setting}\nPremise: {story_world.premise}"
+                        )
+                        created_characters.append(character)
+                        
+                        single_char_span.set_attribute('character_created', True)
+                        single_char_span.set_attribute('character_name', character.name)
+                
+                char_creation_span.set_attribute('total_characters_created', len(created_characters))
+                char_creation_span.set_attribute('character_names', [char.name for char in created_characters])
+                
+                logfire.info(
+                    'Characters created from concepts',
+                    character_count=len(created_characters),
+                    character_names=[char.name for char in created_characters]
+                )
+            
+            # Step 4: Update the opening scene with active characters
+            with logfire.span('Updating opening scene with characters') as scene_span:
+                # Add up to 2 characters to the opening scene as active
+                active_characters = [char.name for char in created_characters[:2]]
+                story_world.current_scene.active_characters = active_characters
+                
+                scene_span.set_attribute('active_characters_set', True)
+                scene_span.set_attribute('active_characters', active_characters)
+                scene_span.set_attribute('scene_location', story_world.current_scene.location)
+                
+                logfire.info(
+                    'Opening scene updated with active characters',
+                    scene_location=story_world.current_scene.location,
+                    active_characters=active_characters
+                )
+                
+                # Enhanced logging for final story world data structure
+                logfire.info(
+                    'Complete story world created',
+                    story_world_structure={
+                        'premise_length': len(story_world.premise),
+                        'setting_length': len(story_world.setting),
+                        'conflicts': story_world.conflicts,
+                        'character_names': list(story_world.characters.keys()),
+                        'character_details': {
+                            name: {
+                                'description_length': len(char.description),
+                                'personality_length': len(char.personality),
+                                'speech_patterns_length': len(char.speech_patterns),
+                                'memories_count': len(char.memories),
+                                'relationships_count': len(char.relationships)
+                            } for name, char in story_world.characters.items()
+                        },
+                        'current_scene': {
+                            'location': story_world.current_scene.location,
+                            'description_length': len(story_world.current_scene.description),
+                            'atmosphere': story_world.current_scene.atmosphere,
+                            'active_characters': story_world.current_scene.active_characters,
+                            'props': story_world.current_scene.props
+                        },
+                        'history_entries': len(story_world.history)
+                    }
+                )
+                
+                span.set_attribute('scenario_created', True)
+                span.set_attribute('final_character_count', len(story_world.characters))
+                span.set_attribute('final_conflicts_count', len(story_world.conflicts))
+                span.set_attribute('active_characters_in_scene', len(active_characters))
+                
+            return story_world
 
     async def continue_story(self, user_input: str, story_world: StoryWorld) -> Tuple[str, StoryWorld]:
         """
@@ -94,28 +166,59 @@ Present this as a structured response that I can approve or refine.
         Returns:
             Tuple of (narrative response, updated story world)
         """
-        # Check for meta-commands
-        if self._is_meta_command(user_input):
-            return await self._handle_meta_command(user_input, story_world)
+        with logfire.span(
+            'Continuing story with user input',
+            user_input=user_input[:100] + '...' if len(user_input) > 100 else user_input,
+            current_scene=story_world.current_scene.location,
+            active_characters=story_world.current_scene.active_characters
+        ) as span:
+            # Check for meta-commands
+            is_meta = self._is_meta_command(user_input)
+            span.set_attribute('is_meta_command', is_meta)
+            
+            if is_meta:
+                with logfire.span('Handling meta-command') as meta_span:
+                    meta_span.set_attribute('meta_command', user_input)
+                    result = await self._handle_meta_command(user_input, story_world)
+                    span.set_attribute('meta_command_processed', True)
+                    return result
 
-        # Create dependencies with current story world
-        deps = StoryDeps(story_world=story_world, client=self.client)
+            # Create dependencies with current story world
+            deps = StoryDeps(story_world=story_world, client=self.client)
 
-        # Build context for the storytelling agent
-        story_context = self._build_story_context(user_input, story_world)
+            # Build context for the storytelling agent
+            with logfire.span('Building story context') as context_span:
+                story_context = self._build_story_context(user_input, story_world)
+                context_span.set_attribute('context_length', len(story_context))
+                context_span.set_attribute('history_entries', len(story_world.history))
 
-        # Get narrative response from the agent
-        result = await self.agent.run(story_context, deps=deps)
+            # Get narrative response from the agent
+            with logfire.span(
+                'Running LLM story continuation',
+                input_length=len(user_input),
+                context_length=len(story_context)
+            ) as llm_span:
+                result = await self.agent.run(story_context, deps=deps)
+                llm_span.set_attribute('response_length', len(str(result.output)))
+                llm_span.set_attribute('model_used', str(get_model()))
+                logfire.info(
+                    'LLM story continuation completed',
+                    response_preview=str(result.output)[:200] + '...' if len(str(result.output)) > 200 else str(result.output)
+                )
 
-        # Update story history
-        story_world.add_history_entry(f"User: {user_input}")
-        story_world.add_history_entry(f"Narrator: {result.output}")
+            # Update story history
+            with logfire.span('Updating story history') as history_span:
+                story_world.add_history_entry(f"User: {user_input}")
+                story_world.add_history_entry(f"Narrator: {result.output}")
+                history_span.set_attribute('total_history_entries', len(story_world.history))
+                span.set_attribute('story_continued', True)
+                span.set_attribute('final_history_length', len(story_world.history))
 
-        return str(result.output), story_world
+            return str(result.output), story_world
 
     async def refine_scenario(self, feedback: str, story_world: StoryWorld) -> StoryWorld:
         """
-        Refine a scenario based on user feedback.
+        Refine a scenario based on user feedback using specialized agents.
         
         Args:
             feedback: User feedback for improvements
@@ -124,24 +227,30 @@ Present this as a structured response that I can approve or refine.
         Returns:
             Updated story world
         """
-        deps = StoryDeps(story_world=story_world, client=self.client)
-
-        refinement_prompt = f"""
-Current scenario:
-Premise: {story_world.premise}
-Setting: {story_world.setting}
-Characters: {list(story_world.characters.keys())}
-
-User feedback: {feedback}
-
-Please refine the scenario based on this feedback. Provide the updated elements.
-"""
-
-        result = await self.agent.run(refinement_prompt, deps=deps)
-
-        # Parse and apply refinements
-        refinement_data = self._parse_scenario_response(result.output)
-        return self._update_story_world(story_world, refinement_data)
+        with logfire.span(
+            'Refining scenario based on feedback',
+            feedback=feedback[:100] + '...' if len(feedback) > 100 else feedback,
+            current_premise=story_world.premise[:50] + '...' if len(story_world.premise) > 50 else story_world.premise
+        ) as span:
+            
+            # Use the scenario manager to refine the scenario
+            with logfire.span('Refining scenario via scenario manager') as refine_span:
+                refined_world = await self.scenario_manager.refine_scenario_from_feedback(story_world, feedback)
+                refine_span.set_attribute('scenario_refined', True)
+                refine_span.set_attribute('new_premise_length', len(refined_world.premise))
+                refine_span.set_attribute('new_setting_length', len(refined_world.setting))
+                
+                logfire.info(
+                    'Scenario refined via specialized agent',
+                    feedback_preview=feedback[:50] + '...' if len(feedback) > 50 else feedback,
+                    new_premise_preview=refined_world.premise[:100] + '...' if len(refined_world.premise) > 100 else refined_world.premise
+                )
+                
+                span.set_attribute('scenario_refined', True)
+                span.set_attribute('character_count_after', len(refined_world.characters))
+                span.set_attribute('final_premise_length', len(refined_world.premise))
+                
+            return refined_world
 
     def _is_meta_command(self, user_input: str) -> bool:
         """Check if user input is a meta-command with *asterisks*."""
@@ -158,13 +267,19 @@ Please refine the scenario based on this feedback. Provide the updated elements.
         Returns:
             Tuple of (narrative response, updated story world)
         """
-        # Remove asterisks
-        meta_instruction = command.strip()[1:-1]
+        with logfire.span(
+            'Processing meta-command',
+            meta_command=command,
+            current_scene=story_world.current_scene.location
+        ) as span:
+            # Remove asterisks
+            meta_instruction = command.strip()[1:-1]
+            span.set_attribute('meta_instruction', meta_instruction)
 
-        deps = StoryDeps(story_world=story_world, client=self.client)
+            deps = StoryDeps(story_world=story_world, client=self.client)
 
-        # Create prompt for handling the meta-command
-        meta_prompt = f"""
+            # Create prompt for handling the meta-command
+            meta_prompt = f"""
 The following change needs to be incorporated naturally into the ongoing narrative: {meta_instruction}
 
 Current scene: {story_world.current_scene.location}
@@ -173,12 +288,25 @@ Recent history: {'; '.join(story_world.history[-3:]) if story_world.history else
 Incorporate this change seamlessly without acknowledging it as a command. Just naturally weave it into the story.
 """
 
-        result = await self.agent.run(meta_prompt, deps=deps)
+            with logfire.span(
+                'Running LLM meta-command processing',
+                prompt_length=len(meta_prompt)
+            ) as llm_span:
+                result = await self.agent.run(meta_prompt, deps=deps)
+                llm_span.set_attribute('response_length', len(str(result.output)))
+                llm_span.set_attribute('model_used', str(get_model()))
+                logfire.info(
+                    'LLM meta-command processing completed',
+                    meta_instruction=meta_instruction,
+                    response_preview=str(result.output)[:200] + '...' if len(str(result.output)) > 200 else str(result.output)
+                )
 
-        # Add to history as a natural story development
-        story_world.add_history_entry(f"Story development: {result.output}")
+            # Add to history as a natural story development
+            story_world.add_history_entry(f"Story development: {result.output}")
+            span.set_attribute('meta_command_processed', True)
+            span.set_attribute('history_entries_after', len(story_world.history))
 
-        return str(result.output), story_world
+            return str(result.output), story_world
 
     def _build_story_context(self, user_input: str, story_world: StoryWorld) -> str:
         """
@@ -208,105 +336,3 @@ User Action/Input: {user_input}
 Continue the narrative naturally, using character tools when NPCs need to speak or act.
 """
         return context
-
-    def _parse_scenario_response(self, response: str) -> Dict:
-        """
-        Parse the agent's scenario creation response.
-        
-        Args:
-            response: The agent's response text
-            
-        Returns:
-            Dictionary with parsed scenario elements
-        """
-        # This is a simplified parser - in a production system,
-        # you might want more sophisticated parsing or structured output
-
-        scenario_data = {
-            "premise": "",
-            "setting": "",
-            "conflicts": [],
-            "characters": [],
-            "opening_scene": {}
-        }
-
-        # Extract premise
-        premise_match = re.search(r"premise[:\s]*(.+?)(?=\n.*?setting|\n.*?conflict|\n.*?character|$)", response, re.IGNORECASE | re.DOTALL)
-        if premise_match:
-            scenario_data["premise"] = premise_match.group(1).strip()
-
-        # Extract setting
-        setting_match = re.search(r"setting[:\s]*(.+?)(?=\n.*?conflict|\n.*?character|\n.*?scene|$)", response, re.IGNORECASE | re.DOTALL)
-        if setting_match:
-            scenario_data["setting"] = setting_match.group(1).strip()
-
-        return scenario_data
-
-    def _build_story_world(self, scenario_data: Dict, initial_concept: str) -> StoryWorld:
-        """
-        Build a complete StoryWorld from parsed scenario data.
-        
-        Args:
-            scenario_data: Parsed scenario elements
-            initial_concept: Original concept for fallback
-            
-        Returns:
-            Complete StoryWorld object
-        """
-        # Create basic story world with fallbacks
-        premise = scenario_data.get("premise", initial_concept)
-        setting = scenario_data.get("setting", "A mysterious location")
-
-        # Create some default characters if none were parsed
-        characters = {}
-        if not scenario_data.get("characters"):
-            # Create a simple default character
-            default_character = Character(
-                name="Guide",
-                description="A mysterious figure who seems to know this place well",
-                personality="Wise, helpful, but secretive about their past",
-                speech_patterns="Speaks in measured tones with occasional cryptic hints"
-            )
-            characters["Guide"] = default_character
-
-        # Create opening scene
-        opening_scene = Scene(
-            location="The Beginning",
-            description="The story is about to unfold",
-            atmosphere="Anticipation and mystery",
-            active_characters=list(characters.keys())[:2],  # Limit to 2 active characters
-            props=[]
-        )
-
-        return StoryWorld(
-            premise=premise,
-            setting=setting,
-            conflicts=scenario_data.get("conflicts", ["An unknown challenge awaits"]),
-            characters=characters,
-            current_scene=opening_scene,
-            history=[f"Story begins: {premise}"]
-        )
-
-    def _update_story_world(self, story_world: StoryWorld, refinement_data: Dict) -> StoryWorld:
-        """
-        Update story world with refinement data.
-        
-        Args:
-            story_world: Current story world
-            refinement_data: Parsed refinement elements
-            
-        Returns:
-            Updated story world
-        """
-        # Update premise if provided
-        if refinement_data.get("premise"):
-            story_world.premise = refinement_data["premise"]
-
-        # Update setting if provided
-        if refinement_data.get("setting"):
-            story_world.setting = refinement_data["setting"]
-
-        # Add refinement to history
-        story_world.add_history_entry("Scenario refined based on user feedback")
-
-        return story_world

@@ -16,14 +16,18 @@
       "Bash(python:*)",
       "Bash(python -m pytest:*)",
       "Bash(python3 -m pytest:*)",
-      "WebFetch(domain:docs.anthropic.com)"
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(pip install:*)"
     ],
     "deny": []
   },
   "mcpServers": {
     "context7": {
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
     }
   }
 }

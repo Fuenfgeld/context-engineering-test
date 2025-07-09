@@ -5,12 +5,15 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 from typing import Generator
+from unittest.mock import AsyncMock
 
 import pytest
+import httpx
 
 from src.models.story import Character, Scene, StoryWorld
 from src.models.session import StorySession
 from src.storage.file_storage import FileStorage
+from src.agents.character import StoryDeps
 
 
 @pytest.fixture
@@ -99,3 +102,15 @@ def populated_storage(file_storage: FileStorage, sample_session: StorySession) -
 def corrupted_session_data() -> str:
     """Corrupted session JSON for testing error handling."""
     return '{"id": "test", "world": {"invalid": "missing required fields"}}'
+
+
+@pytest.fixture
+def mock_http_client():
+    """Create a mock HTTP client for testing."""
+    return AsyncMock(spec=httpx.AsyncClient)
+
+
+@pytest.fixture
+def story_deps(sample_story_world: StoryWorld, mock_http_client) -> StoryDeps:
+    """Create StoryDeps for testing character agent."""
+    return StoryDeps(story_world=sample_story_world, client=mock_http_client)

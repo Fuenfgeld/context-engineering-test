@@ -13,8 +13,8 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ..models.story import StoryWorld
-from .prompts import CHARACTER_SYSTEM_PROMPT
+from models.story import StoryWorld
+from agents.prompts import CHARACTER_SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -58,11 +58,31 @@ def get_model() -> OpenAIModel:
         return OpenAIModel(llm, api_key=os.getenv('OPENAI_API_KEY'))
 
 
-# Configure logfire
-logfire.configure(send_to_logfire='if-token-present')
+# Configure logfire with comprehensive instrumentation
+logfire_token = os.getenv('LOGFIRE_TOKEN')
+if logfire_token:
+    logfire.configure(token=logfire_token, inspect_arguments=False)
+else:
+    logfire.configure(send_to_logfire='if-token-present', inspect_arguments=False)
+
+# Enable instrumentation if available
+try:
+    logfire.instrument_pydantic_ai()  # Instrument PydanticAI for comprehensive LLM call logging
+except Exception as e:
+    pass  # Gracefully handle missing dependencies
+
+try:
+    logfire.instrument_openai()  # Instrument OpenAI provider
+except Exception as e:
+    pass  # Gracefully handle missing dependencies
+
+try:
+    logfire.instrument_httpx()  # Instrument HTTP calls
+except Exception as e:
+    pass  # Gracefully handle missing dependencies
 
 
-# Create the character agent
+# Create the character agent (no tools - just responds as character)
 character_agent = Agent(
     get_model(),
     system_prompt=CHARACTER_SYSTEM_PROMPT,
@@ -71,7 +91,7 @@ character_agent = Agent(
 )
 
 
-@character_agent.tool
+# This function is used as a tool by the storyteller agent
 async def embody_character(
     ctx: RunContext[StoryDeps],
     character_name: str,
@@ -94,14 +114,31 @@ async def embody_character(
     Raises:
         ValueError: If the character is not found in the story world
     """
-    # Get the character from the story world
-    character = ctx.deps.story_world.characters.get(character_name)
+    with logfire.span(
+        'Character embodiment: {character_name}',
+        character_name=character_name,
+        situation=situation[:100] + '...' if len(situation) > 100 else situation
+    ) as span:
+        # Get the character from the story world
+        character = ctx.deps.story_world.characters.get(character_name)
 
-    if not character:
-        raise ValueError(f"Character '{character_name}' not found in the story world")
+        if not character:
+            span.set_attribute('character_found', False)
+            logfire.error(
+                'Character not found in story world',
+                character_name=character_name,
+                available_characters=list(ctx.deps.story_world.characters.keys())
+            )
+            raise ValueError(f"Character '{character_name}' not found in the story world")
 
-    # Build context about the character for the AI
-    character_context = f"""
+        span.set_attribute('character_found', True)
+        span.set_attribute('character_description', character.description[:100] + '...' if len(character.description) > 100 else character.description)
+        span.set_attribute('character_memory_count', len(character.memories))
+        span.set_attribute('character_relationship_count', len(character.relationships))
+
+        # Build context about the character for the AI
+        with logfire.span('Building character context') as context_span:
+            character_context = f"""
 Character: {character.name}
 Description: {character.description}
 Personality: {character.personality}
@@ -115,22 +152,43 @@ Scene Atmosphere: {ctx.deps.story_world.current_scene.atmosphere}
 
 Situation to respond to: {situation}
 """
+            context_span.set_attribute('context_length', len(character_context))
+            context_span.set_attribute('scene_location', ctx.deps.story_world.current_scene.location)
 
-    # Run the character agent to get the response
-    result = await character_agent.run(
-        character_context,
-        deps=ctx.deps
-    )
+        # Run the character agent to get the response
+        with logfire.span(
+            'Running LLM character response',
+            character_name=character_name,
+            context_length=len(character_context)
+        ) as llm_span:
+            result = await character_agent.run(
+                character_context,
+                deps=ctx.deps
+            )
+            llm_span.set_attribute('response_length', len(str(result.output)))
+            llm_span.set_attribute('model_used', str(get_model()))
+            logfire.info(
+                'Character LLM response completed',
+                character_name=character_name,
+                response_preview=str(result.output)[:150] + '...' if len(str(result.output)) > 150 else str(result.output)
+            )
 
-    # Update character memories with this interaction
-    memory_entry = f"Responded to: {situation[:100]}{'...' if len(situation) > 100 else ''}"
-    character.memories.append(memory_entry)
+        # Update character memories with this interaction
+        with logfire.span('Updating character memories') as memory_span:
+            memory_entry = f"Responded to: {situation[:100]}{'...' if len(situation) > 100 else ''}"
+            character.memories.append(memory_entry)
+            
+            # Keep memories manageable (last 20 entries)
+            if len(character.memories) > 20:
+                character.memories = character.memories[-20:]
+                memory_span.set_attribute('memories_trimmed', True)
+            
+            memory_span.set_attribute('total_memories', len(character.memories))
+            memory_span.set_attribute('memory_added', memory_entry)
+            span.set_attribute('character_response_generated', True)
+            span.set_attribute('final_memory_count', len(character.memories))
 
-    # Keep memories manageable (last 20 entries)
-    if len(character.memories) > 20:
-        character.memories = character.memories[-20:]
-
-    return str(result.output)
+        return str(result.output)
 
 
 class CharacterManager:
@@ -163,12 +221,19 @@ class CharacterManager:
         Returns:
             The character's response
         """
-        result = await embody_character(
-            RunContext(deps=self.deps),
-            character_name,
-            situation
-        )
-        return str(result)
+        with logfire.span(
+            'Character manager: character speaks',
+            character_name=character_name,
+            situation_length=len(situation)
+        ) as span:
+            result = await embody_character(
+                RunContext(deps=self.deps),
+                character_name,
+                situation
+            )
+            span.set_attribute('response_generated', True)
+            span.set_attribute('response_length', len(str(result)))
+            return str(result)
 
     def get_character_summary(self, character_name: str) -> Optional[str]:
         """
@@ -206,14 +271,40 @@ class CharacterManager:
         Returns:
             True if memory was added, False if character not found
         """
-        character = self.story_world.characters.get(character_name)
-        if not character:
-            return False
+        with logfire.span(
+            'Adding character memory',
+            character_name=character_name,
+            memory=memory[:100] + '...' if len(memory) > 100 else memory
+        ) as span:
+            character = self.story_world.characters.get(character_name)
+            if not character:
+                span.set_attribute('character_found', False)
+                logfire.warning(
+                    'Attempted to add memory to non-existent character',
+                    character_name=character_name,
+                    available_characters=list(self.story_world.characters.keys())
+                )
+                return False
 
-        character.memories.append(memory)
+            span.set_attribute('character_found', True)
+            span.set_attribute('memory_count_before', len(character.memories))
+            
+            character.memories.append(memory)
 
-        # Keep memories manageable
-        if len(character.memories) > 20:
-            character.memories = character.memories[-20:]
+            # Keep memories manageable
+            trimmed = False
+            if len(character.memories) > 20:
+                character.memories = character.memories[-20:]
+                trimmed = True
 
-        return True
+            span.set_attribute('memory_count_after', len(character.memories))
+            span.set_attribute('memories_trimmed', trimmed)
+            span.set_attribute('memory_added', True)
+            
+            logfire.info(
+                'Character memory added successfully',
+                character_name=character_name,
+                total_memories=len(character.memories)
+            )
+
+            return True
