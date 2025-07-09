@@ -22,6 +22,13 @@ from utils.helpers import (
     format_character_list,
     format_story_history,
     get_display_timestamp,
+    format_character_speech,
+    format_narrator_text,
+    format_system_message,
+    format_error_message,
+    format_success_message,
+    parse_character_speech,
+    format_story_with_colored_dialogue,
 )
 
 
@@ -366,8 +373,8 @@ class StorytellingCLI:
                                 self.current_session.update_world(updated_world)
                                 update_span.set_attribute('new_history_length', len(updated_world.history))
 
-                            # Display the narrative response
-                            print(f"\n📖 {response}")
+                            # Display the narrative response with colored character speech
+                            print(f"\n{self._format_story_response(response)}")
 
                             # Update message history
                             with logfire.span('Updating message history') as msg_span:
@@ -383,7 +390,7 @@ class StorytellingCLI:
                             )
 
                         except Exception as e:
-                            print(f"❌ Error continuing story: {e}")
+                            print(f"\n{format_error_message(f'Error continuing story: {e}')}")
                             input_span.set_attribute('story_error', True)
                             input_span.set_attribute('error_message', str(e))
                             logfire.error(
@@ -519,7 +526,7 @@ class StorytellingCLI:
                         self.storage.save_session(self.current_session)
                         storage_span.set_attribute('save_successful', True)
                         
-                    print("💾 Session saved successfully!")
+                    print(f"\n{format_success_message('Session saved successfully!')}")
                     span.set_attribute('save_successful', True)
                     logfire.info(
                         'Session saved successfully',
@@ -528,7 +535,7 @@ class StorytellingCLI:
                     )
                     
                 except Exception as e:
-                    print(f"❌ Error saving session: {e}")
+                    print(f"\n{format_error_message(f'Error saving session: {e}')}")
                     span.set_attribute('save_successful', False)
                     span.set_attribute('error_message', str(e))
                     logfire.error(
@@ -540,3 +547,17 @@ class StorytellingCLI:
             else:
                 span.set_attribute('no_session_to_save', True)
                 logfire.warning('Attempted to save session but no current session exists')
+
+    def _format_story_response(self, response: str) -> str:
+        """
+        Format story response with colored character speech.
+        
+        Args:
+            response: The raw story response from the storyteller
+            
+        Returns:
+            Formatted response with colored character dialogue
+        """
+        # Use the improved formatting function
+        formatted_response = format_story_with_colored_dialogue(response)
+        return f"{format_system_message('Story continues...')}\n{formatted_response}"
