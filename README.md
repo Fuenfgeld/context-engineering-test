@@ -31,6 +31,7 @@ cd src && PYTHONPATH=/home/max/projects/context-engineering-test/src:/home/max/p
 - Python 3.9+
 - OpenAI API key OR OpenRouter API key
 - Internet connection for AI model access
+- Terminal with color support (most modern terminals)
 
 ## 🛠️ Installation
 
@@ -88,8 +89,14 @@ The application provides an interactive CLI for collaborative storytelling:
 3. Approve or refine the generated scenario
 4. Begin interactive storytelling with character role-play
 
+### Visual Experience:
+- **Color-Coded Characters**: Each character speaks in their unique color (Gandalf: blue, Frodo: green, etc.)
+- **Distinct Formatting**: Character dialogue, narrator text, and system messages are visually distinguished
+- **Enhanced Readability**: Story text is formatted with colors for immersive experience
+
 ### Interactive Features:
 - **Character Role-Play**: NPCs respond authentically based on their personalities
+- **Colored CLI Interface**: Character dialogue is displayed in unique colors for each character
 - **Story Progression**: AI maintains narrative consistency and continuity
 - **Session Management**: Save/load stories to continue later
 - **Memory System**: Characters remember past interactions
@@ -123,6 +130,11 @@ ruff check .
 # Type checking
 mypy src/
 ```
+
+### GitHub Actions
+The repository includes automated workflows for:
+- **Claude Code Review**: Automatically reviews pull requests using Claude
+- **Claude PR Assistant**: Provides AI-powered pull request assistance
 
 ### Project Structure
 ```
